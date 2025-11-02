@@ -28,23 +28,210 @@ This project teaches you:
 
 ## 🏗️ Architecture
 
+![alt text](image.png)
+
+### System Overview
+
 ```
-Customer Message (HTTP POST)
-    ↓
-[Event Producer] → message.received
-    ↓
-[Data Extractor] → message.extracted (regex-based)
-    ↓
-[Content Validator] → message.validated (rule-based)
-    ↓
-[Database Enricher] → message.enriched (PostgreSQL)
-    ↓
-[Message Router] → message.routed.{finance|support|website} (keyword-based)
-    ↓
-    ├→ [Finance Handler]
-    ├→ [Support Handler]
-    └→ [Event Monitor] (watches all events)
+                          ┌─────────────────────────────────────┐
+                          │    Customer/External System         │
+                          └──────────────┬──────────────────────┘
+                                         │ HTTP POST
+                                         │ {"content": "..."}
+                                         ▼
+                          ┌──────────────────────────────────────┐
+                          │      EVENT PRODUCER                  │
+                          │  (Knative Service, min-scale=1)      │
+                          │                                      │
+                          │  • Receives HTTP POST requests       │
+                          │  • Validates JSON payload            │
+                          │  • Creates CloudEvent wrapper        │
+                          │  • Publishes to Kafka Broker         │
+                          └──────────────┬───────────────────────┘
+                                         │ CloudEvent
+                                         │ type: com.learning.message.received
+                                         ▼
+              ┌──────────────────────────────────────────────────────┐
+              │           KAFKA BROKER (Knative Eventing)            │
+              │                                                      │
+              │  • Receives events via kafka-broker-ingress          │
+              │  • Stores in Kafka topic                             │
+              │  • Dispatches via kafka-broker-dispatcher            │
+              │  • Manages subscriptions (Triggers)                  │
+              └──┬───────────────────────────────────────────────┬───┘
+                 │                                               │
+                 │ Trigger: type=message.received                │ ALL EVENTS
+                 ▼                                               │ (no filter)
+  ┌──────────────────────────────────┐                          │
+  │     DATA EXTRACTOR               │                          │
+  │  (Knative Service, scale-to-0)   │                          │
+  │                                  │                          │
+  │  • Extracts email via regex      │                          │
+  │  • Extracts name via regex       │                          │
+  │  • Extracts phone via regex      │                          │
+  │  • Detects sentiment (keywords)  │                          │
+  │  • Adds extracted fields to evt  │                          │
+  └──────────────┬───────────────────┘                          │
+                 │ CloudEvent                                    │
+                 │ type: com.learning.message.extracted          │
+                 ▼                                               │
+  ┌──────────────────────────────────┐                          │
+  │    CONTENT VALIDATOR             │                          │
+  │  (Knative Service, scale-to-0)   │                          │
+  │                                  │                          │
+  │  • Checks for spam keywords      │                          │
+  │  • Checks for profanity          │                          │
+  │  • Validates message length      │                          │
+  │  • Checks URL safety             │                          │
+  │  • Sets validation_status flag   │                          │
+  └──────────────┬───────────────────┘                          │
+                 │ CloudEvent                                    │
+                 │ type: com.learning.message.validated          │
+                 ▼                                               │
+  ┌──────────────────────────────────┐                          │
+  │   DATABASE ENRICHER              │                          │
+  │  (Knative Service, scale-to-0)   │                          │
+  │            │                     │                          │
+  │            ▼                     │                          │
+  │   ┌──────────────────┐          │                          │
+  │   │  PostgreSQL DB   │          │                          │
+  │   │  20 customers    │          │                          │
+  │   └──────────────────┘          │                          │
+  │                                  │                          │
+  │  • Queries DB by email           │                          │
+  │  • Adds customer_id, tier        │                          │
+  │  • Adds account_status           │                          │
+  │  • Adds lifetime_value           │                          │
+  └──────────────┬───────────────────┘                          │
+                 │ CloudEvent                                    │
+                 │ type: com.learning.message.enriched           │
+                 ▼                                               │
+  ┌──────────────────────────────────┐                          │
+  │     MESSAGE ROUTER               │                          │
+  │  (Knative Service, scale-to-0)   │                          │
+  │                                  │                          │
+  │  • Keyword matching (finance)    │                          │
+  │  • Keyword matching (support)    │                          │
+  │  • Keyword matching (website)    │                          │
+  │  • Weighted scoring algorithm    │                          │
+  │  • Routes to highest score       │                          │
+  └──┬────────────────┬──────────────┘                          │
+     │                │                                          │
+     │ type: routed.  │ type: routed.                           │
+     │     finance    │     support                             │
+     ▼                ▼                                          ▼
+┌─────────────┐  ┌─────────────┐                    ┌──────────────────┐
+│  FINANCE    │  │  SUPPORT    │                    │  EVENT MONITOR   │
+│  HANDLER    │  │  HANDLER    │                    │  (Dashboard)     │
+│ (Deployment)│  │ (Deployment)│                    │  (Deployment)    │
+│             │  │             │                    │                  │
+│ • Web UI    │  │ • REST API  │                    │ • Receives ALL   │
+│ • SSE feed  │  │ • In-memory │                    │   event types    │
+│ • Inbox     │  │   storage   │                    │ • SSE dashboard  │
+│   display   │  │ • Message   │                    │ • Real-time flow │
+│             │  │   log       │                    │   visualization  │
+└─────────────┘  └─────────────┘                    └──────────────────┘
 ```
+
+### Traffic Flow Details
+
+**1. Ingress → Event Producer**
+- Protocol: HTTP POST
+- Port: 80/8080
+- Payload: `{"content": "user message"}`
+- Response: `{"event_id": "...", "status": "success"}`
+
+**2. Event Producer → Kafka Broker**
+- Protocol: HTTP (CloudEvents binary mode)
+- Destination: `kafka-broker-ingress.knative-eventing:80`
+- Headers: `ce-type`, `ce-source`, `ce-id`, `ce-specversion`
+- Body: Event data payload
+
+**3. Kafka Broker → Kafka Cluster**
+- Protocol: Kafka protocol (9092)
+- Topic: `knative-broker-knative-demo-learning-broker`
+- Message: Serialized CloudEvent
+- Replication: 1 (single broker)
+
+**4. Kafka Broker → Service Subscribers (via Triggers)**
+- Protocol: HTTP POST (CloudEvents)
+- Dispatcher: `kafka-broker-dispatcher`
+- Filtering: Event type matching
+- Retry: 3 attempts with exponential backoff
+- Concurrency: Parallel delivery to matching triggers
+
+**5. Inter-Service Communication**
+- Each service receives event → processes → publishes new event
+- New event goes back to broker → triggers next service
+- Request-Reply pattern with event transformation
+
+**6. Database Enricher → PostgreSQL**
+- Protocol: PostgreSQL wire protocol (5432)
+- Connection: `customer-database.knative-demo.svc.cluster.local:5432`
+- Query: `SELECT * FROM customers WHERE email = $1`
+- Connection pooling: Single connection per pod
+
+**7. Handlers (Finance/Support/Monitor)**
+- Always-on deployments (not auto-scaling)
+- Event Monitor uses wildcard trigger (no filter)
+- Finance/Support filtered by event type
+- SSE connections for real-time UI updates
+
+## 📦 Services Overview
+
+| Service | Purpose | Scaling | Traffic In | Traffic Out | Processing |
+|---------|---------|---------|------------|-------------|------------|
+| **event_producer** | HTTP API entry point | Min: 1, Max: 5 | HTTP POST from clients | CloudEvents to Broker | Validates JSON, wraps in CloudEvent, publishes |
+| **data_extractor** | Extract structured data | Scale-to-zero | CloudEvents from Broker | CloudEvents to Broker | Regex extraction: email, name, phone, sentiment |
+| **content_validator** | Content safety checks | Scale-to-zero | CloudEvents from Broker | CloudEvents to Broker | Spam detection, profanity filter, length check |
+| **database_enricher** | Customer data lookup | Scale-to-zero | CloudEvents from Broker<br>PostgreSQL queries | CloudEvents to Broker | DB query by email, add customer metadata |
+| **message_router** | Content-based routing | Scale-to-zero | CloudEvents from Broker | CloudEvents to Broker | Keyword matching, scoring, route selection |
+| **finance_handler** | Finance inbox UI | Always-on (1 pod) | CloudEvents from Broker<br>HTTP (UI access) | SSE to browsers | Store messages, serve web UI, SSE stream |
+| **support_handler** | Support message log | Always-on (1 pod) | CloudEvents from Broker<br>HTTP (REST API) | JSON responses | Store messages, REST API for retrieval |
+| **event_monitor** | Observability dashboard | Always-on (1 pod) | ALL CloudEvents<br>HTTP (UI access) | SSE to browsers | Capture all events, serve dashboard, SSE stream |
+
+### Event Types & Flow
+
+```
+com.learning.message.received       → Published by: event_producer
+                                    → Consumed by: data_extractor, event_monitor
+
+com.learning.message.extracted      → Published by: data_extractor
+                                    → Consumed by: content_validator, event_monitor
+
+com.learning.message.validated      → Published by: content_validator
+                                    → Consumed by: database_enricher, event_monitor
+
+com.learning.message.enriched       → Published by: database_enricher
+                                    → Consumed by: message_router, event_monitor
+
+com.learning.message.routed.finance → Published by: message_router
+                                    → Consumed by: finance_handler, event_monitor
+
+com.learning.message.routed.support → Published by: message_router
+                                    → Consumed by: support_handler, event_monitor
+
+com.learning.message.routed.website → Published by: message_router
+                                    → Consumed by: event_monitor (no handler yet)
+```
+
+### Network Ports
+
+| Service | Port | Protocol | Purpose |
+|---------|------|----------|---------|
+| event-producer | 8080 | HTTP | Receive POST requests, health checks |
+| data-extractor | 8080 | HTTP | Receive CloudEvents, health checks |
+| content-validator | 8080 | HTTP | Receive CloudEvents, health checks |
+| database-enricher | 8080 | HTTP | Receive CloudEvents, health checks |
+| message-router | 8080 | HTTP | Receive CloudEvents, health checks |
+| finance-handler | 8080 | HTTP | Receive CloudEvents, serve UI, SSE |
+| support-handler | 8080 | HTTP | Receive CloudEvents, REST API |
+| event-monitor | 8080 | HTTP | Receive CloudEvents, serve dashboard, SSE |
+| customer-database | 5432 | PostgreSQL | Database queries |
+| kafka-broker-ingress | 80 | HTTP | CloudEvent ingress |
+| kafka-broker-dispatcher | - | HTTP | CloudEvent egress to subscribers |
+| my-cluster-kafka | 9092 | Kafka | Broker communication |
+
 
 ## 📦 Services Overview
 
@@ -182,12 +369,4 @@ curl -X POST http://event-producer.demo.example.com \
 - **PostgreSQL** - Customer database
 - **Python/Flask** - Service implementation
 - **Docker** - Containerization
-
-## 📖 Documentation
-
-- [Architecture Deep Dive](docs/ARCHITECTURE.md)
-- [Knative Concepts](docs/KNATIVE_CONCEPTS.md)
-- [Service Details](docs/SERVICES.md)
-- [Deployment Guide](docs/DEPLOYMENT.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
 

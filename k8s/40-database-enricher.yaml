@@ -23,8 +23,6 @@ spec:
           name: http1
           protocol: TCP
         env:
-        - name: PORT
-          value: "8080"
         - name: DB_HOST
           value: "customer-database.knative-demo.svc.cluster.local"
         - name: DB_PORT

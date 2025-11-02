@@ -22,9 +22,6 @@ spec:
         - containerPort: 8080
           name: http1
           protocol: TCP
-        env:
-        - name: PORT
-          value: "8080"
         readinessProbe:
           httpGet:
             path: /healthz

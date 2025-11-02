@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: knative-demo
+  labels:
+    app: knative-learning-demo
+    purpose: education

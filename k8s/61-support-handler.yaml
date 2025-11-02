@@ -1,0 +1,74 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: support-handler
+  namespace: knative-demo
+  labels:
+    app: support-handler
+    demo: knative-learning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: support-handler
+  template:
+    metadata:
+      labels:
+        app: support-handler
+    spec:
+      containers:
+      - name: app
+        image: docker.io/rudder9290/support-handler:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: support-handler
+  namespace: knative-demo
+  labels:
+    app: support-handler
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: support-handler
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: support-handler-trigger
+  namespace: knative-demo
+  labels:
+    app: support-handler
+spec:
+  broker: learning-broker
+  filter:
+    attributes:
+      type: com.learning.message.routed.support
+  subscriber:
+    ref:
+      apiVersion: v1
+      kind: Service
+      name: support-handler

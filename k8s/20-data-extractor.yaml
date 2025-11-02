@@ -1,0 +1,53 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: data-extractor
+  namespace: knative-demo
+  labels:
+    app: data-extractor
+    demo: knative-learning
+spec:
+  template:
+    metadata:
+      labels:
+        app: data-extractor
+      annotations:
+        autoscaling.knative.dev/min-scale: "0"
+        autoscaling.knative.dev/max-scale: "10"
+    spec:
+      containers:
+      - image: docker.io/rudder9290/data-extractor:latest
+        name: app
+        ports:
+        - containerPort: 8080
+          name: http1
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: data-extractor-trigger
+  namespace: knative-demo
+  labels:
+    app: data-extractor
+spec:
+  broker: learning-broker
+  filter:
+    attributes:
+      type: com.learning.message.received
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: data-extractor

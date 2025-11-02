@@ -128,13 +128,3 @@ curl -X POST http://event-producer.demo.example.com \
 **Expected:** Routes to review (customer not found)
 
 ---
-
-## 🎯 Next Steps
-
-Want me to create:
-1. **Kubernetes manifests** (Namespace, Broker, Triggers, Services)?
-2. **Deployment script**?
-3. **Testing script** with sample requests?
-4. **Documentation** on each Knative concept?
-
-Let me know what you'd like next! 🚀

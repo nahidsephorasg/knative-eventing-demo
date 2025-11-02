@@ -1,0 +1,15 @@
+apiVersion: eventing.knative.dev/v1
+kind: Broker
+metadata:
+  name: learning-broker
+  namespace: knative-demo
+  annotations:
+    eventing.knative.dev/broker.class: Kafka
+  labels:
+    app: knative-learning-demo
+spec:
+  config:
+    apiVersion: v1
+    kind: ConfigMap
+    name: kafka-broker-config
+    namespace: knative-eventing

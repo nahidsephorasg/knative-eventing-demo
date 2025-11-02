@@ -1,0 +1,57 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: event-producer
+  namespace: knative-demo
+  labels:
+    app: event-producer
+    demo: knative-learning
+spec:
+  template:
+    metadata:
+      labels:
+        app: event-producer
+      annotations:
+        autoscaling.knative.dev/min-scale: "1"
+        autoscaling.knative.dev/max-scale: "5"
+    spec:
+      containers:
+      - image: docker.io/rudder9290/event-producer:latest
+        name: app
+        ports:
+        - containerPort: 8080
+          name: http1
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+---
+apiVersion: sources.knative.dev/v1
+kind: SinkBinding
+metadata:
+  name: event-producer-sinkbinding
+  namespace: knative-demo
+  labels:
+    app: event-producer
+spec:
+  subject:
+    apiVersion: serving.knative.dev/v1
+    kind: Service
+    name: event-producer
+  sink:
+    ref:
+      apiVersion: eventing.knative.dev/v1
+      kind: Broker
+      name: learning-broker

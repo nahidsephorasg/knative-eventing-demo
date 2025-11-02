@@ -1,0 +1,69 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: database-enricher
+  namespace: knative-demo
+  labels:
+    app: database-enricher
+    demo: knative-learning
+spec:
+  template:
+    metadata:
+      labels:
+        app: database-enricher
+      annotations:
+        autoscaling.knative.dev/min-scale: "0"
+        autoscaling.knative.dev/max-scale: "10"
+    spec:
+      containers:
+      - image: docker.io/rudder9290/database-enricher:latest
+        name: app
+        ports:
+        - containerPort: 8080
+          name: http1
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        - name: DB_HOST
+          value: "customer-database.knative-demo.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "customers"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_PASSWORD
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: database-enricher-trigger
+  namespace: knative-demo
+  labels:
+    app: database-enricher
+spec:
+  broker: learning-broker
+  filter:
+    attributes:
+      type: com.learning.message.validated
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: database-enricher
